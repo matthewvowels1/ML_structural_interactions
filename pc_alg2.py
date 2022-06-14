@@ -37,7 +37,6 @@ class PC_adapted(StructureEstimator):
 
     def estimate(
         self,
-        variant="stable",
         ci_test="chi_square",
         max_cond_vars=5,
         return_type="dag",
@@ -48,12 +47,8 @@ class PC_adapted(StructureEstimator):
     ):
 
         # Step 0: Do checks that the specified parameters are correct, else throw meaningful error.
-        if variant not in ("orig", "stable", "parallel"):
-            raise ValueError(
-                f"variant must be one of: orig, stable, or parallel. Got: {variant}"
-            )
-        elif (not callable(ci_test)) and (
-            ci_test not in ("chi_square", "independence_match", "pearsonr", "mixed_mi", "cont_mi")
+        if (not callable(ci_test)) and (
+            ci_test not in ("chi_square", "independence_match", "gcit", "pearsonr", "mixed_mi", "cont_mi")
         ):
             raise ValueError(
                 "ci_test must be a callable or one of: chi_square, pearsonr, independence_match"
@@ -73,8 +68,6 @@ class PC_adapted(StructureEstimator):
             ci_test=ci_test,
             max_cond_vars=max_cond_vars,
             significance_level=significance_level,
-            variant=variant,
-            n_jobs=n_jobs,
             show_progress=show_progress,
             knn=knn
         )
@@ -101,13 +94,10 @@ class PC_adapted(StructureEstimator):
         ci_test="chi_square",
         max_cond_vars=5,
         significance_level=0.01,
-        variant="stable",
-        n_jobs=-1,
         show_progress=True,
         knn=5
     ):
 
-        print(knn)
         # Initialize initial values and structures.
         lim_neighbors = 0
         separating_sets = dict()
@@ -117,6 +107,8 @@ class PC_adapted(StructureEstimator):
             ci_test = pearsonr
         elif ci_test == "mixed_mi":
             ci_test = mixed_cmi
+        elif ci_test == "gcit":
+            ci_test = gc_it
         elif ci_test == "cont_mi":
             ci_test = ksg_cmi
         elif ci_test == "independence_match":
@@ -125,7 +117,7 @@ class PC_adapted(StructureEstimator):
             ci_test = ci_test
         else:
             raise ValueError(
-                f"ci_test must either be chi_square, pearsonr, independence_match, mixed_mi, or cont_mi, or a function. Got: {ci_test}"
+                f"ci_test must either be chi_square, pearsonr, gcit (GAN), independence_match, mixed_mi, or cont_mi, or a function. Got: {ci_test}"
             )
 
         if show_progress and SHOW_PROGRESS:
@@ -143,82 +135,29 @@ class PC_adapted(StructureEstimator):
 
             # Step 2: Iterate over the edges and find a conditioning set of
             # size `lim_neighbors` which makes u and v independent.
-            if variant == "orig":
-                for (u, v) in graph.edges():
-                    for separating_set in chain(
-                        combinations(set(graph.neighbors(u)) - set([v]), lim_neighbors),
-                        combinations(set(graph.neighbors(v)) - set([u]), lim_neighbors),
-                    ):
-                        # If a conditioning set exists remove the edge, store the separating set
-                        # and move on to finding conditioning set for next edge.
-                        if ci_test(
-                            u,
-                            v,
-                            separating_set,
-                            data=self.data,
-                            # independencies=self.independencies,
-                            significance_level=significance_level,
-                            knn=knn
-                        ):
-                            separating_sets[frozenset((u, v))] = separating_set
-                            graph.remove_edge(u, v)
-                            break
 
-            elif variant == "stable":
-                # In case of stable, precompute neighbors as this is the stable algorithm.
-                neighbors = {node: set(graph[node]) for node in graph.nodes()}
-                for (u, v) in graph.edges():
-                    for separating_set in chain(
-                        combinations(set(graph.neighbors(u)) - set([v]), lim_neighbors),
-                        combinations(set(graph.neighbors(v)) - set([u]), lim_neighbors),
-                    ):
-                        # If a conditioning set exists remove the edge, store the
-                        # separating set and move on to finding conditioning set for next edge.
-                        if ci_test(
-                            u,
-                            v,
-                            separating_set,
-                            data=self.data,
-                            # independencies=self.independencies,
-                            significance_level=significance_level,
-                            knn=knn
-                        ):
-                            separating_sets[frozenset((u, v))] = separating_set
-                            graph.remove_edge(u, v)
-                            break
-
-            elif variant == "parallel":
-                neighbors = {node: set(graph[node]) for node in graph.nodes()}
-
-                def _parallel_fun(u, v):
-                    for separating_set in chain(
-                        combinations(set(graph.neighbors(u)) - set([v]), lim_neighbors),
-                        combinations(set(graph.neighbors(v)) - set([u]), lim_neighbors),
-                    ):
-                        if ci_test(
-                            u,
-                            v,
-                            separating_set,
-                            data=self.data,
-                            # independencies=self.independencies,
-                            significance_level=significance_level,
-                            knn=knn,
-                        ):
-                            return (u, v), separating_set
-
-                results = Parallel(n_jobs=n_jobs, prefer="threads")(
-                    delayed(_parallel_fun)(u, v) for (u, v) in graph.edges()
-                )
-                for result in results:
-                    if result is not None:
-                        (u, v), sep_set = result
+            # In case of stable, precompute neighbors as this is the stable algorithm.
+            neighbors = {node: set(graph[node]) for node in graph.nodes()}
+            for (u, v) in graph.edges():
+                for separating_set in chain(
+                    combinations(set(graph.neighbors(u)) - set([v]), lim_neighbors),
+                    combinations(set(graph.neighbors(v)) - set([u]), lim_neighbors),
+                ):
+                    # If a conditioning set exists remove the edge, store the
+                    # separating set and move on to finding conditioning set for next edge.
+                    val = ci_test(
+                        X=u,
+                        Y=v,
+                        Z=separating_set,
+                        data=self.data,
+                        significance_level=significance_level,
+                        knn=knn)
+                    if val:
+                        print(val, u, v, separating_set)
+                        separating_sets[frozenset((u, v))] = separating_set
                         graph.remove_edge(u, v)
-                        separating_sets[frozenset((u, v))] = sep_set
+                        break
 
-            else:
-                raise ValueError(
-                    f"variant must be one of (orig, stable, parallel). Got: {variant}"
-                )
 
             # Step 3: After iterating over all the edges, expand the search space by increasing the size
             #         of conditioning set by 1.
@@ -242,47 +181,6 @@ class PC_adapted(StructureEstimator):
 
     @staticmethod
     def skeleton_to_pdag(skeleton, separating_sets):
-        """Orients the edges of a graph skeleton based on information from
-        `separating_sets` to form a DAG pattern (DAG).
-
-        Parameters
-        ----------
-        skeleton: UndirectedGraph
-            An undirected graph skeleton as e.g. produced by the
-            estimate_skeleton method.
-
-        separating_sets: dict
-            A dict containing for each pair of not directly connected nodes a
-            separating set ("witnessing set") of variables that makes then
-            conditionally independent. (needed for edge orientation)
-
-        Returns
-        -------
-        Model after edge orientation: pgmpy.base.DAG
-            An estimate for the DAG pattern of the BN underlying the data. The
-            graph might contain some nodes with both-way edges (X->Y and Y->X).
-            Any completion by (removing one of the both-way edges for each such
-            pair) results in a I-equivalent Bayesian network DAG.
-
-        References
-        ----------
-        Neapolitan, Learning Bayesian Networks, Section 10.1.2, Algorithm 10.2 (page 550)
-        http://www.cs.technion.ac.il/~dang/books/Learning%20Bayesian%20Networks(Neapolitan,%20Richard).pdf
-
-
-        Examples
-        --------
-        >>> import pandas as pd
-        >>> import numpy as np
-        >>> from pgmpy.estimators import PC
-        >>> data = pd.DataFrame(np.random.randint(0, 4, size=(5000, 3)), columns=list('ABD'))
-        >>> data['C'] = data['A'] - data['B']
-        >>> data['D'] += data['A']
-        >>> c = PC(data)
-        >>> pdag = c.skeleton_to_pdag(*c.build_skeleton())
-        >>> pdag.edges() # edges: A->C, B->C, A--D (not directed)
-        [('B', 'C'), ('A', 'C'), ('A', 'D'), ('D', 'A')]
-        """
 
         pdag = skeleton.to_directed()
         node_pairs = list(permutations(pdag.nodes(), 2))
