@@ -1,5 +1,5 @@
 # ML_structural_interactions
-This notebook demonstrates the interactions between machine learning models and data-generating structures.
+The ```RF_importances_Shapley.ipynb``` notebook demonstrates the interactions between machine learning models and data-generating structures.
 
 The purpose of the notebook is to demonstrate that even with flexible, data-adaptive machine learning techniques, it is non-trival to avoid falling prey to the interactions between the (potentially unknown) structure of the data generating process.
 
